@@ -47,6 +47,7 @@
 #include "nsIObserverService.h"
 #include "mozilla/Preferences.h"
 #include "nsParserConstants.h"
+#include "nsISandboxInitializer.h"
 
 using namespace mozilla;
 
@@ -327,6 +328,23 @@ nsContentSink::ProcessHeaderData(nsIAtom* aHeader, const nsAString& aValue,
       nsIPresShell* shell = mDocument->GetShell();
       if (shell) {
         shell->DisableThemeSupport();
+      }
+    }
+  }
+  else if (aHeader == nsGkAtoms::documentLabel) {
+    // TODO: parse and set the document label
+
+    nsCOMPtr<nsIDOMWindow> window = do_QueryInterface(mDocument->GetWindow());
+    if (window) {
+      nsCOMPtr<nsISandboxInitializer> sbox =
+        do_CreateInstance("@mozilla.org/sandboxinitializer;1", &rv);
+      if (NS_FAILED(rv)) {
+        return rv;
+      }
+      bool ok = false;
+      rv = sbox->Init(window, aValue, &ok);
+      if (NS_FAILED(rv)) {
+        return rv;
       }
     }
   }

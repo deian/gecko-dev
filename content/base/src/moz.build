@@ -198,6 +198,8 @@ EXTRA_COMPONENTS += [
     'contentSecurityPolicy.manifest',
     'messageWakeupService.js',
     'messageWakeupService.manifest',
+    'sandboxInitializer.js',
+    'sandboxInitializer.manifest',
 ]
 
 EXTRA_PP_COMPONENTS += [

@@ -1,0 +1,20 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface Label;
+interface nsIDOMWindow;
+
+[scriptable, uuid(e36b23fc-e985-4de6-8b31-859d7aec16fc)]
+interface nsISandboxInitializer : nsISupports
+{
+  /**
+   * Set a label to the given window, if the label is properly
+   * fomatted.
+   * Labels are expected to have the form:
+   * [ [ "p1", "p2", ...] , [ "q1", "q2", ...], ...]
+   */
+  boolean init(in nsIDOMWindow aWin, in AString jsonLabel);
+};
