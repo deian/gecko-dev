@@ -50,6 +50,7 @@ UNIFIED_SOURCES += [
 # XPCComponents.cpp cannot be built in unified mode because it uses plarena.h.
 SOURCES += [
     'XPCComponents.cpp',
+    'XPCSandbox.cpp',
 ]
 
 GENERATED_SOURCES += [

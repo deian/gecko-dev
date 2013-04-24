@@ -296,6 +296,7 @@ WEBIDL_FILES = [
     'RTCPeerConnection.webidl',
     'RTCSessionDescription.webidl',
     'RTCStatsReport.webidl',
+    'Sandbox.webidl',
     'Screen.webidl',
     'ScriptProcessorNode.webidl',
     'ScrollAreaEvent.webidl',

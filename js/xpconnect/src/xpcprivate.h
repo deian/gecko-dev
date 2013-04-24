@@ -159,6 +159,9 @@
 #include "nsCxPusher.h"
 #include "nsAXPCNativeCallContext.h"
 
+#include "mozilla/dom/Label.h"
+#include "mozilla/dom/Sandbox.h"
+
 #ifdef XP_WIN
 // Nasty MS defines
 #ifdef GetClassInfo
@@ -3483,6 +3486,142 @@ CloneInto(JSContext *cx, JS::HandleValue vobj, JS::HandleValue vscope,
 } /* namespace xpc */
 
 
+namespace xpc {
+namespace sandbox {
+
+/* Class used to encapsulate the compartment labels. A compartment can either
+ * be a sandbox, in which case it has an explicit mozilla::dom::Sandbox
+ * associated with it, or it can be in sandbox-mode, in which case it has a
+ * set of labels associated with it. */
+class SandboxConfig
+{
+public:
+    SandboxConfig() : mPrivacyLabel(nullptr)
+                    , mTrustLabel(nullptr)
+                    , mPrivacyClearance(nullptr)
+                    , mTrustClearance(nullptr)
+                    , mPrivileges(nullptr)
+                    , mSandbox(nullptr)
+    {}
+
+    ~SandboxConfig() {
+        mPrivacyLabel     = nullptr;
+        mTrustLabel       = nullptr;
+        mPrivacyClearance = nullptr;
+        mTrustClearance   = nullptr;
+        mPrivileges       = nullptr;
+        mSandbox          = nullptr;
+    }
+
+    // Is the compartment a sandbox or did we enable sandbox-mode by setting
+    // the compartment labels.
+    inline bool Enabled() {
+        return isSandbox() || isSandboxMode();
+    }
+
+    // Is the compartment a sandbox?
+    inline bool isSandbox() {
+        return !!mSandbox;
+    }
+
+    // Is the compartment in sandbox mode
+    inline bool isSandboxMode() {
+        return  mPrivacyLabel && mTrustLabel;
+    }
+
+    // Is the compartment in sandbox mode
+    inline bool HaveClerance() {
+        return  !!mPrivacyClearance && !!mTrustClearance;
+    }
+
+#define DEFINE_SET_LABEL(name, sboxSetter)                               \
+    inline void Set##name(mozilla::dom::Label *aLabel) {                 \
+        NS_ASSERTION(aLabel, "Set##name called with null label!");       \
+        if (isSandbox()) {                                               \
+           mSandbox->sboxSetter(aLabel);                                 \
+        } else {                                                         \
+          (m##name) = aLabel;                                            \
+        }                                                                \
+    }
+
+#define DEFINE_GET_LABEL(name, sboxGetter)                      \
+    inline already_AddRefed<mozilla::dom::Label> Get##name() {  \
+        nsRefPtr<mozilla::dom::Label> l = isSandbox() ?         \
+          mSandbox->sboxGetter() : (m##name);                   \
+        return !l ? nullptr: l.forget();                        \
+    }
+
+#define DEFINE_SET_CLEARANCE(name)                                       \
+    inline void Set##name(mozilla::dom::Label *aLabel) {                 \
+        NS_ASSERTION(aLabel, "Set##name called with null label!");       \
+        NS_ASSERTION(isSandboxMode(), "Set##name called on sandbox!");   \
+        (m##name) = aLabel;                                              \
+    }
+
+    // Compartment label
+    DEFINE_SET_LABEL(PrivacyLabel, SetCurrentPrivacy);
+    DEFINE_GET_LABEL(PrivacyLabel, CurrentPrivacy);
+
+    DEFINE_SET_LABEL(TrustLabel, SetCurrentTrust);
+    DEFINE_GET_LABEL(TrustLabel, CurrentTrust);
+
+    // Compartment clearance
+    DEFINE_SET_CLEARANCE(PrivacyClearance);
+    DEFINE_GET_LABEL(PrivacyClearance, Privacy);
+
+    DEFINE_SET_CLEARANCE(TrustClearance);
+    DEFINE_GET_LABEL(TrustClearance, Trust);
+
+
+#undef DEFINE_SET_CLEARANCE
+#undef DEFINE_SET_LABEL
+#undef DEFINE_GET_LABEL
+
+    // Compartment privileges
+
+    inline void SetPrivileges(mozilla::dom::Label *aLabel) {
+        NS_ASSERTION(aLabel, "SetPrivileges called with null label!");
+        mPrivileges = aLabel;
+    }
+
+    inline already_AddRefed<mozilla::dom::Label> GetPrivileges() {
+        nsRefPtr<mozilla::dom::Label> l = mPrivileges;
+        return !l ? nullptr: l.forget();
+    }
+
+    // Sandbox related
+
+    inline void SetSandbox(mozilla::dom::Sandbox *box) {
+        NS_ASSERTION(box, "SetSandbox called with null sandbox!");
+        NS_ASSERTION(!isSandboxMode(), "Conflicting, sandbox-mode enabled!");
+        mSandbox = box;
+    }
+
+    mozilla::dom::Sandbox* GetSandbox() {
+        return mSandbox;
+    }
+
+
+private:
+    
+    // Compartment labels
+    nsRefPtr<mozilla::dom::Label> mPrivacyLabel;
+    nsRefPtr<mozilla::dom::Label> mTrustLabel;
+
+    // Compartment clearance
+    nsRefPtr<mozilla::dom::Label> mPrivacyClearance;
+    nsRefPtr<mozilla::dom::Label> mTrustClearance;
+
+    // Compartment privileges
+    nsRefPtr<mozilla::dom::Label> mPrivileges;
+
+    // Compartment sandbox
+    mozilla::dom::Sandbox* mSandbox;
+};
+
+} //namespace sandbox
+} // namespace xpc
+
 /***************************************************************************/
 // Inlined utilities.
 
@@ -3566,6 +3705,8 @@ public:
             return;
         locationURI = aLocationURI;
     }
+
+    sandbox::SandboxConfig sandboxConfig;
 
 private:
     nsCString location;
