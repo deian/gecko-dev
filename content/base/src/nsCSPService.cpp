@@ -155,15 +155,20 @@ CSPService::ShouldLoad(uint32_t aContentType,
 
   // ----- END OF TEMPORARY FAST PATH FOR CERTIFIED APPS. -----
 
-  // find the principal of the document that initiated this request and see
-  // if it has a CSP policy object
-  nsCOMPtr<nsINode> node(do_QueryInterface(aRequestContext));
-  nsCOMPtr<nsIPrincipal> principal;
-  nsCOMPtr<nsIContentSecurityPolicy> csp;
-  if (node) {
-    principal = node->NodePrincipal();
-    principal->GetCsp(getter_AddRefs(csp));
+  nsCOMPtr<nsIPrincipal> principal = aRequestPrincipal;
 
+  if (!principal) {
+    // find the principal of the document that initiated this request and see
+    // if it has a CSP policy object
+    nsCOMPtr<nsINode> node(do_QueryInterface(aRequestContext));
+    if (node) {
+      principal = node->NodePrincipal();
+    }
+  }
+
+  if (principal) {
+    nsCOMPtr<nsIContentSecurityPolicy> csp;
+    principal->GetCsp(getter_AddRefs(csp));
     if (csp) {
 #ifdef PR_LOGGING
       {
@@ -196,7 +201,8 @@ CSPService::ShouldLoad(uint32_t aContentType,
     nsAutoCString uriSpec;
     aContentLocation->GetSpec(uriSpec);
     PR_LOG(gCspPRLog, PR_LOG_DEBUG,
-           ("COULD NOT get nsINode for location: %s", uriSpec.get()));
+           ("DO NOT HAVE request principal and \
+             COULD NOT get nsINode for location: %s", uriSpec.get()));
   }
 #endif
 
@@ -223,13 +229,19 @@ CSPService::ShouldProcess(uint32_t         aContentType,
   if (!sCSPEnabled)
     return NS_OK;
 
-  // find the nsDocument that initiated this request and see if it has a
-  // CSP policy object
-  nsCOMPtr<nsINode> node(do_QueryInterface(aRequestContext));
-  nsCOMPtr<nsIPrincipal> principal;
-  nsCOMPtr<nsIContentSecurityPolicy> csp;
-  if (node) {
-    principal = node->NodePrincipal();
+  nsCOMPtr<nsIPrincipal> principal = aRequestPrincipal;
+
+  if (!principal) {
+    // find the nsDocument that initiated this request and see if it has a
+    // CSP policy object
+    nsCOMPtr<nsINode> node(do_QueryInterface(aRequestContext));
+    if (node) {
+      principal = node->NodePrincipal();
+    }
+  }
+
+  if (principal) {
+    nsCOMPtr<nsIContentSecurityPolicy> csp;
     principal->GetCsp(getter_AddRefs(csp));
 
     if (csp) {
@@ -263,7 +275,8 @@ CSPService::ShouldProcess(uint32_t         aContentType,
     nsAutoCString uriSpec;
     aContentLocation->GetSpec(uriSpec);
     PR_LOG(gCspPRLog, PR_LOG_DEBUG,
-           ("COULD NOT get nsINode for location: %s", uriSpec.get()));
+           ("DO NOT HAVE request principal and \
+             COULD NOT get nsINode for location: %s", uriSpec.get()));
   }
 #endif
   return NS_OK;
