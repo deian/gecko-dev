@@ -3401,6 +3401,27 @@ JSObject *
 CreateGlobalObject(JSContext *cx, const JSClass *clasp, nsIPrincipal *principal,
                    JS::CompartmentOptions& aOptions);
 
+class ContextHolder : public nsIScriptObjectPrincipal
+{
+public:
+    ContextHolder(JSContext *aOuterCx, JS::HandleObject aSandbox, nsIPrincipal *aPrincipal);
+    virtual ~ContextHolder();
+
+    JSContext * GetJSContext()
+    {
+        return mJSContext;
+    }
+
+    nsIPrincipal * GetPrincipal() { return mPrincipal; }
+
+    NS_DECL_ISUPPORTS
+
+private:
+    JSContext* mJSContext;
+    nsCOMPtr<nsIPrincipal> mPrincipal;
+};
+
+
 bool
 InitGlobalObject(JSContext* aJSContext, JS::Handle<JSObject*> aGlobal,
                  uint32_t aFlags);
