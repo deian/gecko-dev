@@ -193,6 +193,8 @@ FilteringWrapper<Base, Policy>::enter(JSContext *cx, HandleObject wrapper,
 #define NNXOW FilteringWrapper<CrossCompartmentSecurityWrapper, Opaque>
 #define NNXOWC FilteringWrapper<CrossCompartmentSecurityWrapper, OpaqueWithCall>
 #define GO FilteringWrapper<CrossCompartmentSecurityWrapper, GentlyOpaque>
+#define CSO FilteringWrapper<CrossCompartmentSecurityWrapper, SandboxPolicy>
+#define XSO FilteringWrapper<SecurityXrayXPCWN, SandboxPolicy>
 template<> XOW XOW::singleton(0);
 template<> DXOW DXOW::singleton(0);
 template<> NNXOW NNXOW::singleton(0);
@@ -200,10 +202,14 @@ template<> NNXOWC NNXOWC::singleton(0);
 
 template<> GO GO::singleton(0);
 
+template<> CSO CSO::singleton(0);
+template<> XSO XSO::singleton(0);
+
 template class XOW;
 template class DXOW;
 template class NNXOW;
 template class NNXOWC;
 template class ChromeObjectWrapperBase;
 template class GO;
+template class CSO;
 }

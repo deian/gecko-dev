@@ -312,7 +312,9 @@ static void
 DEBUG_CheckUnwrapSafety(HandleObject obj, js::Wrapper *handler,
                         JSCompartment *origin, JSCompartment *target)
 {
-    if (AccessCheck::isChrome(target) || xpc::IsUniversalXPConnectEnabled(target)) {
+    if (handler == &FilteringWrapper<CrossCompartmentSecurityWrapper, SandboxPolicy>::singleton ||
+        handler == &FilteringWrapper<SecurityXrayXPCWN, SandboxPolicy>::singleton) {
+    } else if (AccessCheck::isChrome(target) || xpc::IsUniversalXPConnectEnabled(target)) {
         // If the caller is chrome (or effectively so), unwrap should always be allowed.
         MOZ_ASSERT(!handler->hasSecurityPolicy());
     } else if (handler == &FilteringWrapper<CrossCompartmentSecurityWrapper, GentlyOpaque>::singleton) {
@@ -403,6 +405,8 @@ WrapperFactory::Rewrap(JSContext *cx, HandleObject existing, HandleObject obj,
     bool sameOrigin = targetSubsumesOrigin && originSubsumesTarget;
     XrayType xrayType = GetXrayType(obj);
     bool waiveXrayFlag = flags & WAIVE_XRAY_WRAPPER_FLAG;
+    bool originIsSandbox = xpc::sandbox::IsCompartmentSandboxed(origin);
+    bool targetIsSandbox = xpc::sandbox::IsCompartmentSandboxed(target);
 
     Wrapper *wrapper;
     CompartmentPrivate *targetdata = EnsureCompartmentPrivate(target);
@@ -435,6 +439,13 @@ WrapperFactory::Rewrap(JSContext *cx, HandleObject existing, HandleObject obj,
              IsXBLScope(target))
     {
         wrapper = &FilteringWrapper<CrossCompartmentSecurityWrapper, GentlyOpaque>::singleton;
+    }
+    else if (!originIsChrome && !targetIsChrome && (targetIsSandbox || originIsSandbox)) {
+        if (xrayType == XrayForWrappedNative) {
+            wrapper = &FilteringWrapper<SecurityXrayXPCWN, SandboxPolicy>::singleton;
+        } else {
+            wrapper = &FilteringWrapper<CrossCompartmentSecurityWrapper, SandboxPolicy>::singleton;
+        }
     }
 
     //
