@@ -32,6 +32,8 @@ enum StructuredCloneTags {
 
   SCTAG_DOM_FUNCTION,
 
+  SCTAG_DOM_LABELEDBLOB,
+
   SCTAG_DOM_MAX
 };
 

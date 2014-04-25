@@ -215,6 +215,7 @@ static void Shutdown();
 #include "mozilla/dom/GamepadService.h"
 #endif
 #include "nsCSPService.h"
+#include "LabeledBlobService.h"
 #include "nsISmsService.h"
 #include "nsIMmsService.h"
 #include "nsIMobileMessageService.h"
@@ -589,6 +590,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(FakeSpeechRecognitionService)
 #endif
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(CSPService)
+NS_GENERIC_FACTORY_CONSTRUCTOR(LabeledBlobService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMixedContentBlocker)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsPrincipal)
@@ -603,6 +605,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(TCPSocketChild)
 NS_GENERIC_FACTORY_CONSTRUCTOR(TCPSocketParent)
 NS_GENERIC_FACTORY_CONSTRUCTOR(TCPServerSocketChild)
 NS_GENERIC_FACTORY_CONSTRUCTOR(UDPSocketChild)
+
 
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -732,6 +735,7 @@ NS_DEFINE_NAMED_CID(NS_GEOLOCATION_CID);
 NS_DEFINE_NAMED_CID(NS_AUDIOCHANNEL_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_FOCUSMANAGER_CID);
 NS_DEFINE_NAMED_CID(CSPSERVICE_CID);
+NS_DEFINE_NAMED_CID(LABELEDBLOBSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_MIXEDCONTENTBLOCKER_CID);
 NS_DEFINE_NAMED_CID(NS_EVENTLISTENERSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_GLOBALMESSAGEMANAGER_CID);
@@ -1021,6 +1025,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_SYNTHVOICEREGISTRY_CID, true, nullptr, nsSynthVoiceRegistryConstructor },
 #endif
   { &kCSPSERVICE_CID, false, nullptr, CSPServiceConstructor },
+  { &kLABELEDBLOBSERVICE_CID , false, nullptr, LabeledBlobServiceConstructor },
   { &kNS_MIXEDCONTENTBLOCKER_CID, false, nullptr, nsMixedContentBlockerConstructor },
   { &kNS_EVENTLISTENERSERVICE_CID, false, nullptr, CreateEventListenerService },
   { &kNS_GLOBALMESSAGEMANAGER_CID, false, nullptr, CreateGlobalMessageManager },
@@ -1174,6 +1179,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { NS_SYNTHVOICEREGISTRY_CONTRACTID, &kNS_SYNTHVOICEREGISTRY_CID },
 #endif
   { CSPSERVICE_CONTRACTID, &kCSPSERVICE_CID },
+  { LABELEDBLOBSERVICE_CONTRACTID, &kLABELEDBLOBSERVICE_CID },
   { NS_MIXEDCONTENTBLOCKER_CONTRACTID, &kNS_MIXEDCONTENTBLOCKER_CID },
   { NS_EVENTLISTENERSERVICE_CONTRACTID, &kNS_EVENTLISTENERSERVICE_CID },
   { NS_GLOBALMESSAGEMANAGER_CONTRACTID, &kNS_GLOBALMESSAGEMANAGER_CID },

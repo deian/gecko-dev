@@ -55,6 +55,7 @@
 #include "mozilla/AutoRestore.h"
 #include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/ImageData.h"
+#include "mozilla/dom/LabeledBlob.h"
 #include "mozilla/dom/ImageDataBinding.h"
 #include "nsAXPCNativeCallContext.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
@@ -2761,6 +2762,10 @@ NS_DOMReadStructuredClone(JSContext* cx,
     // Wrap it in a JS::Value.
     return imageData->WrapObject(cx);
   }
+  if (tag == SCTAG_DOM_LABELEDBLOB) {
+    return LabeledBlob::ReadStructuredClone(cx, reader, data);
+  }
+    // Read the information out of the stream.
 
   // Don't know what this is. Bail.
   xpc::Throw(cx, NS_ERROR_DOM_DATA_CLONE_ERR);
@@ -2776,9 +2781,14 @@ NS_DOMWriteStructuredClone(JSContext* cx,
   ImageData* imageData;
   nsresult rv = UNWRAP_OBJECT(ImageData, obj, imageData);
   if (NS_FAILED(rv)) {
-    // Don't know what this is. Bail.
-    xpc::Throw(cx, NS_ERROR_DOM_DATA_CLONE_ERR);
-    return false;
+    LabeledBlob* labeledBlob;
+    rv = UNWRAP_OBJECT(LabeledBlob, obj, labeledBlob);
+    if (NS_FAILED(rv)) {
+      // Don't know what this is. Bail.
+      xpc::Throw(cx, NS_ERROR_DOM_DATA_CLONE_ERR);
+      return false;
+    }
+    return labeledBlob->WriteStructuredClone(cx, writer);
   }
 
   // Prepare the ImageData internals.
