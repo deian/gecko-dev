@@ -34,6 +34,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/dom/XMLHttpRequestBinding.h"
+#include "mozilla/dom/Label.h"
 
 #ifdef Status
 /* Xlib headers insist on this for some reason... Nuke it because
@@ -51,6 +52,7 @@ class nsIUnicodeDecoder;
 class nsIJSID;
 
 namespace mozilla {
+
 
 // A helper for building up an ArrayBuffer object's data
 // before creating the ArrayBuffer itself.  Will do doubling
@@ -407,6 +409,8 @@ private:
     return Send(Nullable<RequestBody>(aBody));
   }
 
+  bool RaiseLabel() const;
+
 public:
   void Send(ErrorResult& aRv)
   {
@@ -640,7 +644,8 @@ protected:
     XML_HTTP_RESPONSE_TYPE_TEXT,
     XML_HTTP_RESPONSE_TYPE_CHUNKED_TEXT,
     XML_HTTP_RESPONSE_TYPE_CHUNKED_ARRAYBUFFER,
-    XML_HTTP_RESPONSE_TYPE_MOZ_BLOB
+    XML_HTTP_RESPONSE_TYPE_MOZ_BLOB,
+    XML_HTTP_RESPONSE_TYPE_LABELED_BLOB
   };
 
   void SetResponseType(nsXMLHttpRequest::ResponseTypeEnum aType, ErrorResult& aRv);
@@ -675,6 +680,7 @@ protected:
   nsIRequestObserver* mRequestObserver;
 
   nsCOMPtr<nsIURI> mBaseURI;
+  nsRefPtr<mozilla::dom::Label> mPrivacyLabel;
 
   uint32_t mState;
 
@@ -706,6 +712,7 @@ protected:
 
   bool mIsSystem;
   bool mIsAnon;
+
 
   /**
    * Close the XMLHttpRequest's channels and dispatch appropriate progress

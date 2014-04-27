@@ -72,6 +72,10 @@
 
 #include "nsWrapperCacheInlines.h"
 
+#include "mozilla/dom/Role.h"
+#include "mozilla/dom/Label.h"
+#include "mozilla/dom/LabeledBlob.h"
+
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -824,6 +828,9 @@ NS_IMETHODIMP nsXMLHttpRequest::GetResponseType(nsAString& aResponseType)
   case XML_HTTP_RESPONSE_TYPE_MOZ_BLOB:
     aResponseType.AssignLiteral("moz-blob");
     break;
+  case XML_HTTP_RESPONSE_TYPE_LABELED_BLOB:
+    aResponseType.AssignLiteral("labeled-blob");
+    break;
   default:
     NS_ERROR("Should not happen");
   }
@@ -876,6 +883,8 @@ NS_IMETHODIMP nsXMLHttpRequest::SetResponseType(const nsAString& aResponseType)
     responseType = XML_HTTP_RESPONSE_TYPE_CHUNKED_ARRAYBUFFER;
   } else if (aResponseType.EqualsLiteral("moz-blob")) {
     responseType = XML_HTTP_RESPONSE_TYPE_MOZ_BLOB;
+  } else if (aResponseType.EqualsLiteral("labeled-blob")) {
+    responseType = XML_HTTP_RESPONSE_TYPE_LABELED_BLOB;
   } else {
     return NS_OK;
   }
@@ -977,6 +986,7 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
   }
   case XML_HTTP_RESPONSE_TYPE_BLOB:
   case XML_HTTP_RESPONSE_TYPE_MOZ_BLOB:
+  case XML_HTTP_RESPONSE_TYPE_LABELED_BLOB:
   {
     if (!(mState & XML_HTTP_REQUEST_DONE)) {
       if (mResponseType != XML_HTTP_RESPONSE_TYPE_MOZ_BLOB) {
@@ -993,7 +1003,14 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
     }
 
     JS::Rooted<JS::Value> result(aCx);
-    aRv = nsContentUtils::WrapNative(aCx, mResponseBlob, &result);
+    if (mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
+      nsRefPtr<Label> trust   = new Label();
+      nsRefPtr<LabeledBlob> labeledBlob = 
+        new LabeledBlob(mResponseBlob, *mPrivacyLabel, *trust);
+      aRv = nsContentUtils::WrapNative(aCx, labeledBlob, &result);
+    } else {
+      aRv = nsContentUtils::WrapNative(aCx, mResponseBlob, &result);
+    }
     return result;
   }
   case XML_HTTP_RESPONSE_TYPE_DOCUMENT:
@@ -1045,13 +1062,19 @@ uint32_t
 nsXMLHttpRequest::Status()
 {
   if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
-    // Make sure we don't leak status information from denied cross-site
-    // requests.
-    if (mChannel) {
-      nsresult status;
-      mChannel->GetStatus(&status);
-      if (NS_FAILED(status)) {
+    if (mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
+      if (!RaiseLabel()) { // Failed to raise label
         return 0;
+      }
+    } else {
+      // Make sure we don't leak status information from denied cross-site
+      // requests.
+      if (mChannel) {
+        nsresult status;
+        mChannel->GetStatus(&status);
+        if (NS_FAILED(status)) {
+          return 0;
+        }
       }
     }
   }
@@ -1115,11 +1138,16 @@ nsXMLHttpRequest::GetStatusText(nsCString& aStatusText)
   if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
     // Make sure we don't leak status information from denied cross-site
     // requests.
-    if (mChannel) {
-      nsresult status;
-      mChannel->GetStatus(&status);
-      if (NS_FAILED(status)) {
+    if (mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
+      if (!RaiseLabel())
         return;
+    } else {
+      if (mChannel) {
+        nsresult status;
+        mChannel->GetStatus(&status);
+        if (NS_FAILED(status)) {
+          return;
+        }
       }
     }
   }
@@ -1207,6 +1235,11 @@ nsXMLHttpRequest::IsSafeHeader(const nsACString& header, nsIHttpChannel* httpCha
   if (!(mState & XML_HTTP_REQUEST_USE_XSITE_AC)){
     return true;
   }
+  // if this is a labeled blob response, allow all headers since we raise
+  // the current label
+  if (mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
+    return true;
+  }
   // Check for dangerous headers
   // Make sure we don't leak header information from denied cross-site
   // requests.
@@ -1262,6 +1295,9 @@ nsXMLHttpRequest::GetAllResponseHeaders(nsCString& aResponseHeaders)
                 XML_HTTP_REQUEST_OPENED | XML_HTTP_REQUEST_SENT)) {
     return;
   }
+
+  if (!RaiseLabel())
+    return;
 
   if (nsCOMPtr<nsIHttpChannel> httpChannel = GetCurrentHttpChannel()) {
     nsRefPtr<nsHeaderVisitor> visitor = new nsHeaderVisitor(this, httpChannel);
@@ -1320,6 +1356,9 @@ nsXMLHttpRequest::GetResponseHeader(const nsACString& header,
       return;
     }
 
+    if (!RaiseLabel())
+      return;
+
     // Even non-http channels supply content type and content length.
     // Remember we don't leak header information from denied cross-site
     // requests.
@@ -1356,6 +1395,9 @@ nsXMLHttpRequest::GetResponseHeader(const nsACString& header,
 
     return;
   }
+
+  if (!RaiseLabel())
+    return;
 
   // Check for dangerous headers
   if (!IsSafeHeader(header, httpChannel)) {
@@ -1639,6 +1681,20 @@ nsXMLHttpRequest::Open(const nsACString& inMethod, const nsACString& url,
   rv = NS_NewURI(getter_AddRefs(uri), url, nullptr, baseURI);
   if (NS_FAILED(rv)) return rv;
 
+  if (uri) { // set the label
+    ErrorResult aRv;
+    nsAutoCString cspec;
+    nsAutoString spec;
+    rv = uri->GetSpec(cspec);
+    if (NS_FAILED(rv)) { return rv; }
+    CopyUTF8toUTF16(cspec, spec);
+    nsRefPtr<Role> origin = new Role(spec, aRv);
+    if (aRv.Failed()) { return rv; }
+    mPrivacyLabel = new Label(*origin, aRv);
+    if (aRv.Failed() || !mPrivacyLabel) { return rv; }
+  }
+
+
   rv = CheckInnerWindowCorrectness();
   NS_ENSURE_SUCCESS(rv, rv);
   int16_t shouldLoad = nsIContentPolicy::ACCEPT;
@@ -1697,7 +1753,7 @@ nsXMLHttpRequest::Open(const nsACString& inMethod, const nsACString& url,
                      channelPolicy);
   if (NS_FAILED(rv)) return rv;
 
-  mState &= ~(XML_HTTP_REQUEST_USE_XSITE_AC |
+ mState &= ~(XML_HTTP_REQUEST_USE_XSITE_AC |
               XML_HTTP_REQUEST_NEED_AC_PREFLIGHT);
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
@@ -1737,7 +1793,8 @@ nsXMLHttpRequest::StreamReaderFunc(nsIInputStream* in,
   nsresult rv = NS_OK;
 
   if (xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_BLOB ||
-      xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB) {
+      xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB ||
+      xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
     if (!xmlHttpRequest->mDOMFile) {
       if (!xmlHttpRequest->mBlobSet) {
         xmlHttpRequest->mBlobSet = new BlobSet();
@@ -1843,7 +1900,8 @@ nsXMLHttpRequest::OnDataAvailable(nsIRequest *request,
 
   bool cancelable = false;
   if ((mResponseType == XML_HTTP_RESPONSE_TYPE_BLOB ||
-       mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB) && !mDOMFile) {
+       mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB ||
+       mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) && !mDOMFile) {
     cancelable = CreateDOMFile(request);
     // The nsIStreamListener contract mandates us
     // to read from the stream before returning.
@@ -2122,7 +2180,8 @@ nsXMLHttpRequest::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult
 
   if (NS_SUCCEEDED(status) &&
       (mResponseType == XML_HTTP_RESPONSE_TYPE_BLOB ||
-       mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB)) {
+       mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB ||
+       mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB)) {
     if (!mDOMFile) {
       CreateDOMFile(request);
     }
@@ -2817,6 +2876,9 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
       new nsCORSListenerProxy(listener, mPrincipal, withCredentials);
     rv = corsListener->Init(mChannel, true);
     NS_ENSURE_SUCCESS(rv, rv);
+    if (mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
+      corsListener->ResponseIsLabeled();
+    }
     listener = corsListener;
   }
   else {
@@ -2961,6 +3023,28 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
   }
 
   return rv;
+}
+
+bool
+nsXMLHttpRequest::RaiseLabel() const
+{
+  if (mPrivacyLabel && mResponseType == XML_HTTP_RESPONSE_TYPE_LABELED_BLOB) {
+    JSContext *cx = nsContentUtils::GetCurrentJSContext();
+    JSCompartment *compartment = js::GetContextCompartment(cx);
+    MOZ_ASSERT(compartment);
+
+    if (MOZ_UNLIKELY(!xpc::sandbox::IsCompartmentSandboxed(compartment)))
+      xpc::sandbox::EnableCompartmentSandbox(compartment);
+
+    nsRefPtr<Label> privs = xpc::sandbox::GetCompartmentPrivileges(compartment);
+
+    nsRefPtr<Label> trust = new Label();
+
+    // raises current label
+    return xpc::sandbox::GuardRead(compartment, *mPrivacyLabel,
+                                   *trust, privs, cx, true);
+  }
+  return true;
 }
 
 /* void setRequestHeader (in ByteString header, in ByteString value); */

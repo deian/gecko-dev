@@ -61,6 +61,8 @@ public:
 
   nsresult Init(nsIChannel* aChannel, bool aAllowDataURI = false);
 
+  void ResponseIsLabeled() { mIsLabeledResponse = true; }
+
 private:
   nsresult UpdateChannel(nsIChannel* aChannel, bool aAllowDataURI = false);
   nsresult CheckRequestApproved(nsIRequest* aRequest);
@@ -81,6 +83,7 @@ private:
   nsCOMPtr<nsIAsyncVerifyRedirectCallback> mRedirectCallback;
   nsCOMPtr<nsIChannel> mOldRedirectChannel;
   nsCOMPtr<nsIChannel> mNewRedirectChannel;
+  bool mIsLabeledResponse;
 };
 
 #endif

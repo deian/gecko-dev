@@ -428,7 +428,8 @@ nsCORSListenerProxy::nsCORSListenerProxy(nsIStreamListener* aOuter,
     mWithCredentials(aWithCredentials && !gDisableCORSPrivateData),
     mRequestApproved(false),
     mHasBeenCrossSite(false),
-    mIsPreflight(false)
+    mIsPreflight(false),
+    mIsLabeledResponse(false)
 {
 }
 
@@ -445,7 +446,8 @@ nsCORSListenerProxy::nsCORSListenerProxy(nsIStreamListener* aOuter,
     mHasBeenCrossSite(false),
     mIsPreflight(true),
     mPreflightMethod(aPreflightMethod),
-    mPreflightHeaders(aPreflightHeaders)
+    mPreflightHeaders(aPreflightHeaders),
+    mIsLabeledResponse(false)
 {
   for (uint32_t i = 0; i < mPreflightHeaders.Length(); ++i) {
     ToLowerCase(mPreflightHeaders[i]);
@@ -561,6 +563,11 @@ nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest)
   // Test that things worked on a HTTP level
   nsCOMPtr<nsIHttpChannel> http = do_QueryInterface(aRequest);
   NS_ENSURE_TRUE(http, NS_ERROR_DOM_BAD_URI);
+
+  // If this is a labeled response then just allow the cross-origin request
+  if (mIsLabeledResponse) {
+    return NS_OK;
+  }
 
   // Check the Access-Control-Allow-Origin header
   nsAutoCString allowedOriginHeader;
