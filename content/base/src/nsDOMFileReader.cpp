@@ -144,22 +144,26 @@ nsDOMFileReader::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
   nsRefPtr<nsDOMFileReader> fileReader = new nsDOMFileReader();
 
   nsCOMPtr<nsPIDOMWindow> owner = do_QueryInterface(aGlobal.GetAsSupports());
-  if (!owner) {
-    NS_WARNING("Unexpected nsIJSNativeInitializer owner");
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
-  }
+  if (owner) {
+    fileReader->BindToOwner(owner);
 
-  fileReader->BindToOwner(owner);
-
-  // This object is bound to a |window|,
-  // so reset the principal.
-  nsCOMPtr<nsIScriptObjectPrincipal> scriptPrincipal = do_QueryInterface(owner);
-  if (!scriptPrincipal) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
+    // This object is bound to a |window|,
+    // so reset the principal.
+    nsCOMPtr<nsIScriptObjectPrincipal> scriptPrincipal = do_QueryInterface(owner);
+    if (!scriptPrincipal) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    fileReader->mPrincipal = scriptPrincipal->GetPrincipal();
+  } else {
+    JSCompartment *compartment = js::GetObjectCompartment(aGlobal.Get());
+    if (!compartment) {
+      NS_WARNING("Unexpected nsIJSNativeInitializer owner");
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    fileReader->mPrincipal = xpc::GetCompartmentPrincipal(compartment);
   }
-  fileReader->mPrincipal = scriptPrincipal->GetPrincipal();
   return fileReader.forget();
 }
 
