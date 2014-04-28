@@ -594,11 +594,14 @@ GuardRead(JSCompartment *compatment,
           JSContext *cx = nullptr,
           bool doTaint = false);
 
-// Can information flow from compartment to  object labeld with privacy and trust
+// Can information flow from compartment to object labeld with privacy and trust
 NS_EXPORT_(bool)
 GuardWrite(JSCompartment *compartment,
           mozilla::dom::Label &privacy, mozilla::dom::Label &trust,
           mozilla::dom::Label *aPrivs = nullptr);
+// Can information flow from compartment to dst
+NS_EXPORT_(bool)
+GuardWrite(JSCompartment *compartment, JSCompartment *dst);
 
 } // namespace sandbox
 } // namespace xpc

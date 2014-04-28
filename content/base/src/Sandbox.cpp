@@ -8,6 +8,7 @@
 #include "mozilla/dom/RoleBinding.h"
 #include "mozilla/dom/LabelBinding.h"
 #include "mozilla/dom/PrivilegeBinding.h"
+#include "mozilla/dom/FileReaderBinding.h"
 #include "mozilla/dom/SandboxBinding.h"
 #include "nsContentUtils.h"
 #include "nsIContentSecurityPolicy.h"
@@ -77,8 +78,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(Sandbox,
                                                   DOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPrivacy)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTrust)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCurrentPrivacy)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCurrentTrust)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPrincipal)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEventTarget)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
@@ -89,8 +88,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(Sandbox,
   tmp->Destroy();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPrivacy)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTrust)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCurrentPrivacy)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCurrentTrust)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPrincipal)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mEventTarget)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
@@ -114,10 +111,9 @@ NS_IMPL_RELEASE_INHERITED(Sandbox, DOMEventTargetHelper)
 ////////////////////////////////
 
 Sandbox::Sandbox(mozilla::dom::Label& privacy, mozilla::dom::Label& trust)
-  : mPrivacy(&privacy)
+  : mIsClean(false)
+  , mPrivacy(&privacy)
   , mTrust(&trust)
-  , mCurrentPrivacy(nullptr)
-  , mCurrentTrust(nullptr)
   , mSandboxObj(nullptr)
   , mPrincipal(nullptr)
   , mResult(JSVAL_VOID)
@@ -140,8 +136,6 @@ Sandbox::Destroy()
 {
   mPrivacy = nullptr;
   mTrust = nullptr;
-  mCurrentPrivacy = nullptr;
-  mCurrentTrust = nullptr;
   mSandboxObj = nullptr;
   mPrincipal = nullptr;
   mResult = JSVAL_VOID;
@@ -197,7 +191,22 @@ Sandbox::Constructor(const GlobalObject& global,
                      mozilla::dom::Label& trust, 
                      ErrorResult& aRv)
 {
+  aRv.MightThrowJSException();
   EnableSandbox(global, cx);
+
+  JSCompartment *compartment =
+    js::GetObjectCompartment(getGlobalJSObject(global));
+  MOZ_ASSERT(compartment);
+
+  nsRefPtr<Label> privs = 
+    xpc::sandbox::GetCompartmentPrivileges(compartment);
+
+  if(!xpc::sandbox::GuardWrite(compartment, privacy, trust, privs)) {
+    JSErrorResult(cx, aRv, 
+        "Label of sandbox must be bounded by the current label and clearance.");
+    return nullptr;
+  }
+
   nsRefPtr<Label> privacyCopy = privacy.Clone(aRv);
   if (aRv.Failed()) {
     return nullptr;
@@ -245,54 +254,44 @@ void
 Sandbox::Schedule(JSContext* cx, JS::HandleScript src, ErrorResult& aRv)
 {
   aRv.MightThrowJSException();
-  JSCompartment *compartment = js::GetContextCompartment(cx);
-  nsRefPtr<Label> privs = xpc::sandbox::GetCompartmentPrivileges(compartment);
 
-  MOZ_ASSERT(privs);
+  if (mIsClean) {
+    JSCompartment *compartment = js::GetContextCompartment(cx);
+    MOZ_ASSERT(compartment);
 
-  nsRefPtr<Label> callerP =
-    xpc::sandbox::GetCompartmentPrivacyLabel(compartment);
-  nsRefPtr<Label> callerT =
-    xpc::sandbox::GetCompartmentTrustLabel(compartment);
+    // set the current label of the sandbox
+    nsRefPtr<Label> curPrivacy =
+      xpc::sandbox::GetCompartmentPrivacyLabel(compartment);
+    nsRefPtr<Label> curTrust =
+      xpc::sandbox::GetCompartmentTrustLabel(compartment);
+    nsRefPtr<Label> privs = 
+      xpc::sandbox::GetCompartmentPrivileges(compartment);
+    if (!privs) { privs = new Label(); }
 
-  if (MOZ_UNLIKELY(!xpc::sandbox::IsCompartmentSandboxed(compartment))) {
-    //If we somehow ended up with a Sandbox object but are not in a 
-    //compartment that is not a sandbox/sandbox-mode
-
-    // enable sandbox-mode
-    xpc::sandbox::EnableCompartmentSandbox(compartment);
-
-    //set the initial label of the sandbox to this compartments labels
-    callerP = xpc::sandbox::GetCompartmentPrivacyLabel(compartment);
-    callerT = xpc::sandbox::GetCompartmentTrustLabel(compartment);
-    if (!callerP || !callerT) {
-      JSErrorResult(cx, aRv, "Cannot enable sandbox mode");
+    if (!mPrivacy->Subsumes(*privs, *curPrivacy) ||
+        !curTrust->Subsumes(*privs, *mTrust)) {
+      JSErrorResult(cx, aRv, "Label is not above the current label.");
       return;
     }
-  }
 
-  // if this is the first time we're scheduling code in the sandbox,
-  // start with an initial label set to the current compartment's
-  // labels (though we must check that these labels flow to the labels
-  // of the sandbox)
-  if (!mCurrentPrivacy && !mCurrentTrust) {
-    mCurrentPrivacy = callerP->Clone(aRv);
-    if (aRv.Failed()) {
-      JSErrorResult(cx, aRv, "Cannot set initial privacy label");
+    JSCompartment* sandboxCompartment = 
+      js::GetObjectCompartment(js::UncheckedUnwrap(mSandboxObj));
+    MOZ_ASSERT(sandboxCompartment);
+
+    // "raise" the label of the sandbox
+    xpc::sandbox::SetCompartmentPrivacyLabel(compartment, curPrivacy);
+    xpc::sandbox::SetCompartmentTrustLabel(compartment, curTrust);
+
+    xpc::sandbox::RefineCompartmentSandboxPolicies(sandboxCompartment);
+    mIsClean = false;
+  } else {
+
+    // current compartment label must flow to label of sandbox
+    // which must in turn be lower than the current compartment clearance
+    if (!GuardWriteOnly(cx)) {
+      JSErrorResult(cx, aRv, "Cannot execute in sandbox with lower label ");
       return;
     }
-    mCurrentTrust = callerT->Clone(aRv);
-    if (aRv.Failed()) {
-      JSErrorResult(cx, aRv, "Cannot set initial trust label");
-      return;
-    }
-  }
-
-  // current compartment label must flow to label of sandbox
-  if (!mPrivacy->Subsumes(*privs, *callerP) ||
-      !callerT->Subsumes(*privs, *mTrust)) {
-    JSErrorResult(cx, aRv, "Cannot execute code in a less sensitive sandbox");
-    return;
   }
 
   // It is required that EvalInSandbox not raise the current labels
@@ -324,15 +323,6 @@ GetSourceFromURI(JSContext* cx, const nsAString& aURL,
 
     // Check that the compartment label+privs [= uri
     nsRefPtr<Label> privs = xpc::sandbox::GetCompartmentPrivileges(compartment);
-    if (!privs) 
-      privs = new Label();
-
-    nsRefPtr<Label> currentLabel =
-      xpc::sandbox::GetCompartmentPrivacyLabel(compartment);
-    if (!currentLabel) {
-      JSErrorResult(cx, aRv, "Failed to get current privacy label.");
-      return;
-    }
 
     // Create URI corresponding to aURL
     nsCOMPtr<nsIURI> uri;
@@ -360,12 +350,11 @@ GetSourceFromURI(JSContext* cx, const nsAString& aURL,
     if (aRv.Failed()) return;
 
     // this is privacy so the [= corresponds to <=
-    if (!urlLabel->Subsumes(*privs, *currentLabel)) {
+    nsRefPtr<Label> emptyLabel = new Label();
+    if(!xpc::sandbox::GuardWrite(compartment, *urlLabel, *emptyLabel, privs)) {
       JSErrorResult(cx, aRv, "Fetching script would leak information.");
       return;
     }
-
-
   }
 
   { // Get script from URL
@@ -474,12 +463,6 @@ Sandbox::ScheduleURI(JSContext* cx, const nsAString& aURL,
 #undef JSERR_ENSURE_SUCCESS
 
 
-bool
-Sandbox::IsClean() const
-{
-  return !mCurrentPrivacy && !mCurrentTrust;
-}
-
 void 
 Sandbox::Ondone(JSContext* cx, EventHandlerNonNull* successHandler, 
                 const Optional<nsRefPtr<EventHandlerNonNull> >& errorHandler,
@@ -494,15 +477,6 @@ Sandbox::Ondone(JSContext* cx, EventHandlerNonNull* successHandler,
   if (MOZ_UNLIKELY(!xpc::sandbox::IsCompartmentSandboxed(compartment)))
     xpc::sandbox::EnableCompartmentSandbox(compartment);
 
-  nsRefPtr<Label> privs = xpc::sandbox::GetCompartmentPrivileges(compartment);
-  
-  // raises current label
-  if (!xpc::sandbox::GuardRead(compartment, *mPrivacy,*mTrust,
-                               privs, cx, true)) {
-    JSErrorResult(cx, aRv, "Cannot read from sandbox.");
-    return;
-  }
-
   // set handlers
 
   SetOnmessage(successHandler);
@@ -512,9 +486,7 @@ Sandbox::Ondone(JSContext* cx, EventHandlerNonNull* successHandler,
   }
 
   //dispatch handlers
-
-  if (!DispatchResult(cx))
-    aRv.Throw(NS_ERROR_FAILURE);
+  DispatchResult(cx);
 }
 
 void
@@ -524,7 +496,12 @@ Sandbox::PostMessage(JSContext* cx, JS::Handle<JS::Value> message,
   aRv.MightThrowJSException();
 
   // check that we can write to sandbox, but fail silently
-  if (!GuardWriteOnly(cx)) return;
+  if (!GuardWriteOnly(cx)) {
+    NS_WARNING("Can't write to sandbox, postMessage failed");
+    if (mIsClean)
+      JSErrorResult(cx, aRv, "postMessage: can't write to sandbox.");
+    return;
+  }
 
   // clear message
   ClearMessage();
@@ -564,7 +541,9 @@ Sandbox::PostMessage(JSContext* cx, JS::Handle<JS::Value> message,
 void
 Sandbox::DispatchSandboxOnmessageEvent(ErrorResult& aRv)
 {
-  if (!mMessageIsSet) return;
+  // if the message has not been set or there is not registered
+  // handler, fail silently
+  if (!mMessageIsSet || !mEventTarget) return;
 
   nsCOMPtr<nsIDOMEvent> event;
   nsresult rv = EventDispatcher::CreateEvent(mEventTarget, nullptr, nullptr,
@@ -597,61 +576,14 @@ Sandbox::Trust() const
   return trust.forget();
 }
 
-already_AddRefed<Label>
-Sandbox::CurrentPrivacy() const
-{
-  nsRefPtr<Label> privacy = mCurrentPrivacy;
-  return privacy.forget();
-}
-
-// Caller should ensure that this label subsumes the current label and
-// is subsumed by the sanbox label
-void 
-Sandbox::SetCurrentPrivacy(mozilla::dom::Label* aLabel)
-{
-  mCurrentPrivacy = aLabel;
-}
-
-already_AddRefed<Label>
-Sandbox::CurrentTrust() const
-{
-  nsRefPtr<Label> trust = mCurrentTrust;
-  return trust.forget();
-}
-
-// Caller should ensure that this label subsumes the sandbox label and
-// is subsumed by the current label
-void
-Sandbox::SetCurrentTrust(mozilla::dom::Label* aLabel) 
-{
-  mCurrentTrust = aLabel;
-}
-
-
 JS::Value
 Sandbox::GetResult(JSContext* cx, ErrorResult& aRv) {
   aRv.MightThrowJSException();
 
-  {
-    //TODO: reduce copy-paste shared with OnDone
-    JSCompartment *compartment = js::GetContextCompartment(cx);
-    MOZ_ASSERT(compartment);
-
-
-    if (MOZ_UNLIKELY(!xpc::sandbox::IsCompartmentSandboxed(compartment)))
-      xpc::sandbox::EnableCompartmentSandbox(compartment);
-
-    nsRefPtr<Label> privs = xpc::sandbox::GetCompartmentPrivileges(compartment);
-
-    // raises current label
-    if (!xpc::sandbox::GuardRead(compartment, *mPrivacy,*mTrust,
-          privs, cx, true)) {
-      JSErrorResult(cx, aRv, "Cannot read from sandbox.");
-      return JSVAL_VOID;
-    }
+  if (!GuardReadOnly(cx)) {
+    return JSVAL_VOID;
   }
 
-  
   JS::RootedValue v(cx, mResult);
 
   if (!JS_WrapValue(cx, &v)) {
@@ -662,6 +594,28 @@ Sandbox::GetResult(JSContext* cx, ErrorResult& aRv) {
   return v;
 }
 
+// Returns true if reading from the sandbox is allowerd
+bool
+Sandbox::GuardReadOnly(JSContext* cx) const {
+  JSCompartment *compartment = js::GetContextCompartment(cx);
+  return GuardReadOnly(compartment);
+}
+
+bool
+Sandbox::GuardReadOnly(JSCompartment * compartment) const {
+  MOZ_ASSERT(compartment);
+  if (MOZ_UNLIKELY(!xpc::sandbox::IsCompartmentSandboxed(compartment)))
+    xpc::sandbox::EnableCompartmentSandbox(compartment);
+
+  nsRefPtr<Label> privs = xpc::sandbox::GetCompartmentPrivileges(compartment);
+
+  JSCompartment* sandboxCompartment = 
+    js::GetObjectCompartment(js::UncheckedUnwrap(mSandboxObj));
+  MOZ_ASSERT(sandboxCompartment);
+
+  return xpc::sandbox::GuardRead(compartment, sandboxCompartment, privs);
+}
+
 // Returns true if writing to the sandbox is allowerd
 // I.e. the current label flows to the label of the sandbox
 bool
@@ -669,19 +623,28 @@ Sandbox::GuardWriteOnly(JSContext* cx) const {
   JSCompartment* compartment = js::GetContextCompartment(cx);
   MOZ_ASSERT(compartment);
 
-  nsRefPtr<Label> curPrivs   =
-    xpc::sandbox::GetCompartmentPrivileges(compartment);
+  if (MOZ_UNLIKELY(!xpc::sandbox::IsCompartmentSandboxed(compartment)))
+    xpc::sandbox::EnableCompartmentSandbox(compartment);
 
-  return xpc::sandbox::GuardWrite(compartment, *mPrivacy, *mTrust, curPrivs);
+  JSCompartment* sandboxCompartment = 
+    js::GetObjectCompartment(js::UncheckedUnwrap(mSandboxObj));
+  MOZ_ASSERT(sandboxCompartment);
+
+  return xpc::sandbox::GuardWrite(compartment, sandboxCompartment);
 }
 
 void 
-Sandbox::Grant(JSContext* cx, mozilla::dom::Privilege& priv)
+Sandbox::Grant(JSContext* cx, mozilla::dom::Privilege& priv, ErrorResult& aRv)
 {
   //TODO change to a grant/ongrant API
 
   // check that we can write to sandbox, but fail silently
-  if (!GuardWriteOnly(cx)) return;
+  if (!GuardWriteOnly(cx)) {
+    NS_WARNING("Can't write to sandbox, grant failed");
+    if (mIsClean)
+      JSErrorResult(cx, aRv, "grant: can't write to sandbox.");
+    return;
+  }
 
   // get the unwrapped sandbox object and enter its compartment
   JSCompartment* sandboxCompartment = 
@@ -702,7 +665,12 @@ Sandbox::AttachObject(JSContext* cx, JS::Handle<JSObject*> aObj,
   aRv.MightThrowJSException();
 
   // check that we can write to sandbox, but fail silently
-  if (!GuardWriteOnly(cx)) return;
+  if (!GuardWriteOnly(cx)) {
+    NS_WARNING("Can't write to sandbox, attaching failed");
+    if (mIsClean)
+      JSErrorResult(cx, aRv, "attachObject: can't write to sandbox.");
+    return;
+  }
 
   // unwrap the object
 //  JS::RootedObject obj(cx, js::UncheckedUnwrap(aObj));
@@ -798,11 +766,6 @@ Sandbox::EnableSandbox(const GlobalObject& global, JSContext *cx)
     js::GetObjectCompartment(getGlobalJSObject(global));
   MOZ_ASSERT(compartment);
   xpc::sandbox::EnableCompartmentSandbox(compartment);
-
-  /*
-  if (IsSandboxMode(global))
-    js::RecomputeWrappers(cx, js::AllCompartments(), js::AllCompartments());
-  */
 }
 
 bool 
@@ -867,9 +830,7 @@ Sandbox::SetPrivacyLabel(const GlobalObject& global, JSContext* cx,
 
   xpc::sandbox::SetCompartmentPrivacyLabel(compartment, &aLabel);
   //RecomputeWrappers called by RefineSecurityPerimeter
-  if (IsSandboxMode(global)) {
-    xpc::sandbox::RefineCompartmentSandboxPolicies(compartment, cx);
-  }
+  xpc::sandbox::RefineCompartmentSandboxPolicies(compartment, cx);
 }
 
 // Helper macro for retriveing the privacy/trust label/clearance
@@ -942,12 +903,6 @@ Sandbox::SetPrivacyClearance(const GlobalObject& global, JSContext* cx,
   aRv.MightThrowJSException();
   EnableSandbox(global, cx);
 
-  if (!IsSandboxMode(global)) {
-    JSErrorResult(cx, aRv, 
-                  "Can only set the clearance in a sandbox-mode compartment.");
-    return;
-  }
-
   JSCompartment *compartment =
     js::GetObjectCompartment(getGlobalJSObject(global));
   MOZ_ASSERT(compartment);
@@ -987,12 +942,6 @@ Sandbox::SetTrustClearance(const GlobalObject& global, JSContext* cx,
 {
   aRv.MightThrowJSException();
   EnableSandbox(global, cx);
-
-  if (!IsSandboxMode(global)) {
-    JSErrorResult(cx, aRv,
-                  "Can only set the clearance in a sandbox-mode compartment.");
-    return;
-  }
 
   JSCompartment *compartment =
     js::GetObjectCompartment(getGlobalJSObject(global));
@@ -1065,9 +1014,7 @@ Sandbox::SetPrivileges(const GlobalObject& global, JSContext* cx,
   if (aRv.Failed()) return;
   SANDBOX_CONFIG(compartment).SetPrivileges(newPrivs);
   //RecomputeWrappers called by RefineSecurityPerimeter
-  if (IsSandboxMode(global)) {
-    xpc::sandbox::RefineCompartmentSandboxPolicies(compartment, cx);
-  }
+  xpc::sandbox::RefineCompartmentSandboxPolicies(compartment, cx);
 }
 
 
@@ -1115,11 +1062,7 @@ SandboxDone(JSContext *cx, unsigned argc, jsval *vp)
 
   // Handler may be called after ondone is registered, dispatch
   
-  if (!sandbox->DispatchResult(cx)) {
-    JS_ReportError(cx, "Failed to dispatch result.");
-    return false;
-  }
-
+  sandbox->DispatchResult(cx, true); // Fails silently
 
   return true;
 }
@@ -1133,9 +1076,6 @@ SandboxOnmessage(JSContext *cx, unsigned argc, jsval *vp)
     xpc::sandbox::GetCompartmentSandbox(compartment);
 
   MOZ_ASSERT(sandbox); // must be in sandboxed compartment
-
-  // Raise label of sandbox
-  sandbox->RaiseLabel();
 
   // check that the number of arguments is 1
   JS::CallArgs args = CallArgsFromVp(argc, vp);
@@ -1166,7 +1106,7 @@ SandboxOnmessage(JSContext *cx, unsigned argc, jsval *vp)
   sandbox->SetOnmessageForSandbox(callback);
 
 
-  // Dispatch event handler
+  // Dispatch event handler if we have a waiting messsage
   ErrorResult aRv;
   sandbox->DispatchSandboxOnmessageEvent(aRv);
   if (aRv.Failed()) {
@@ -1186,9 +1126,6 @@ SandboxGetMessage(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
     xpc::sandbox::GetCompartmentSandbox(compartment);
 
   MOZ_ASSERT(sandbox); // must be in sandboxed compartment
-
-  // Raise label of sandbox
-  sandbox->RaiseLabel();
 
   return sandbox->SetMessageToHandle(cx, vp);
 }
@@ -1233,7 +1170,6 @@ Sandbox::Own(const GlobalObject& global, JSContext* cx,
     js::GetObjectCompartment(getGlobalJSObject(global));
   MOZ_ASSERT(compartment);
 
-  MOZ_ASSERT(compartment);
   own(compartment, priv);
 }
 
@@ -1264,36 +1200,32 @@ Sandbox::Import(const GlobalObject& global, JSContext* cx,
 
 // Internal ==================================================================
 
-
-// Set the compartment and current sandbox labels to the sandbox
-// label (set at construction time).
-void
-Sandbox::RaiseLabel()
-{
-  mCurrentPrivacy = mPrivacy;
-  mCurrentTrust = mTrust;
-}
-
 // This function tries to dispatch an event. It fails silently if it
 // can't dispatch an event due to the result not being set or the
 // handlers not being registered.
-bool
-Sandbox::DispatchResult(JSContext* cx)
+void
+Sandbox::DispatchResult(JSContext* cx, bool inSandbox)
 {
   // Only dispatch if result has been set
   if (mResultType == ResultNone)
-    return true;
+    return;
 
+  // If the ondone handler has not been set or // if the return type is an
+  // error and onerror has not been set, retrn early.
   if (!GetOnmessage() || (mResultType == ResultError && !GetOnerror()))
-    return true;
+    return;
 
-  // Wrap the result
-  /*
-  if (!JS_WrapValue(cx, mResult.unsafeGet())) {
-    ClearResult();
-    return false;
+  if (inSandbox) {
+    // enter the parent compartment where the sandbox actually is
+    // XXX is it always where the event handler are?
+    JSAutoRequest req(cx);
+    JSAutoCompartment ac(cx, mSandboxObj);
+    if (!GuardReadOnly(cx))
+     return;
+  } else {
+    if (!GuardReadOnly(cx))
+     return;
   }
-  */
 
   nsCOMPtr<nsIDOMEvent> event;
   nsresult rv = EventDispatcher::CreateEvent(this, nullptr, nullptr,
@@ -1301,7 +1233,7 @@ Sandbox::DispatchResult(JSContext* cx)
                                              getter_AddRefs(event));
   if (NS_FAILED(rv)) {
     JS_ReportError(cx, "Failed to create event.");
-    return false;
+    return;
   }
 
   event->InitEvent((mResultType == ResultError) ? NS_LITERAL_STRING("error")
@@ -1311,8 +1243,6 @@ Sandbox::DispatchResult(JSContext* cx)
   event->SetTrusted(true);
 
   DispatchDOMEvent(nullptr, event, nullptr, nullptr);
-
-  return true;
 }
 
 void 
@@ -1331,54 +1261,7 @@ Sandbox::Init(const GlobalObject& global, JSContext* cx, ErrorResult& aRv)
   // Set the sandbox principal and add CSP policy that restrict
   // network communication accordingly
 
-  nsCOMPtr<nsIPrincipal> principal = mPrivacy->GetPrincipalIfSingleton();
-
-  // We export the XHR constructor in every case, but CSP only
-  // allows 'self' when the privacy label corresponds to the
-  // singleton-principal, and '*' when the label is public. 
-  // This depends on bug 886164
-
-  if (principal) {
-    // Just use principal in label. We don't need
-    // to clone it since we do this when we create labels.
-    mPrincipal = principal;
-  } else {
-    mPrincipal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    if(NS_FAILED(rv)) { aRv.Throw(rv); return; }
-  }
-
-  nsString policy;
-  if (mPrivacy->IsEmpty()) { // case 1: public label:
-    policy = NS_LITERAL_STRING("default-src * 'unsafe-inline'");
-  } else if (!principal) {   // case 2: conjunctive label:
-    policy = NS_LITERAL_STRING("default-src 'none' 'unsafe-inline';");
-  } else {                   // case 3: singleton label:
-    policy = NS_LITERAL_STRING("default-src 'none' 'unsafe-inline'; \
-                                connect-src 'self';");
-  }
-
-  { //set csp policy on principal
-    nsCOMPtr<nsIContentSecurityPolicy> csp =
-      do_CreateInstance("@mozilla.org/contentsecuritypolicy;1", &rv);
-    if(NS_FAILED(rv)) { aRv.Throw(rv); return; }
-
-    nsCOMPtr<nsIURI> uri;
-    rv = mPrincipal->GetURI(getter_AddRefs(uri));
-    if(NS_FAILED(rv)) { aRv.Throw(rv); return; }
-
-    { // remove any existing policies
-      int numPolicies = 0;
-      nsresult rv = csp->GetPolicyCount(&numPolicies);
-      if (NS_SUCCEEDED(rv)) {
-        for (int i=numPolicies-1; i>=0; i--)
-          csp->RemovePolicy(i);
-      }
-    }
-    csp->AppendPolicy(policy, uri, false, true);
-    rv = mPrincipal->SetCsp(csp);
-    if(NS_FAILED(rv)) { aRv.Throw(rv); return; }
-  }
-
+  mPrincipal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
 
   RootedValue sandboxVal(cx, JS::UndefinedValue());
   SandboxOptions sandboxOptions;
@@ -1399,12 +1282,16 @@ Sandbox::Init(const GlobalObject& global, JSContext* cx, ErrorResult& aRv)
     return;
   }
 
+  nsRefPtr<Label> curPrivacy = GetPrivacyLabel(global, cx);
+  nsRefPtr<Label> curTrust   = GetTrustLabel(global, cx);
+
 
   {
     // Make a special cx for the sandbox and push it.
     // NB: As soon as the RefPtr goes away, the cx goes away. So declare
     // it first so that it disappears last.
-    nsRefPtr<xpc::ContextHolder> sandCxHolder = new ContextHolder(cx, sandbox, mPrincipal);
+    nsRefPtr<xpc::ContextHolder> sandCxHolder = 
+      new ContextHolder(cx, sandbox, mPrincipal);
     JSContext *sandcx = sandCxHolder->GetJSContext();
     MOZ_ASSERT(sandcx, "Can't prepare context for evalInSandbox");
     if (!sandcx) {
@@ -1419,6 +1306,7 @@ Sandbox::Init(const GlobalObject& global, JSContext* cx, ErrorResult& aRv)
     mozilla::dom::LabelBinding::GetConstructorObject(sandcx, sandbox);
     mozilla::dom::PrivilegeBinding::GetConstructorObject(sandcx, sandbox);
     mozilla::dom::SandboxBinding::GetConstructorObject(sandcx, sandbox);
+    mozilla::dom::FileReaderBinding::GetConstructorObject(sandcx, sandbox);
 
     //TODO: check if any of these fail
     JS_DefineFunction(sandcx, sandbox, "done", SandboxDone, 1, 0);
@@ -1428,6 +1316,12 @@ Sandbox::Init(const GlobalObject& global, JSContext* cx, ErrorResult& aRv)
 
     JSCompartment *compartment = js::GetObjectCompartment(sandbox);
     xpc::sandbox::EnableCompartmentSandbox(compartment, this);
+
+    xpc::sandbox::SetCompartmentPrivacyClearance(compartment, mPrivacy);
+    xpc::sandbox::SetCompartmentTrustClearance(compartment, mTrust);
+
+    xpc::sandbox::SetCompartmentPrivacyLabel(compartment, curPrivacy);
+    xpc::sandbox::SetCompartmentTrustLabel(compartment, curTrust);
   }
 
   mSandboxObj = sandbox;
@@ -1452,25 +1346,18 @@ Sandbox::EvalInSandbox(JSContext *cx, JS::HandleScript script, ErrorResult &aRv)
     JS::RootedObject rootedSandbox(cx, mSandboxObj);
     ok = JS::CloneAndExecuteScript(cx, rootedSandbox, script);
 
-    // Raise the label of the sandbox compartment to the sandbox label
-    RaiseLabel();
-
     // If the sandbox threw an exception, grab it off the context.
     if (JS_GetPendingException(cx, &v)) {
       MOZ_ASSERT(!ok);
       JS_ClearPendingException(cx);
       SetResult(v, ResultError);
+      DispatchResult(cx);
     }
   }
 
-  //
-  // Alright, we're back on the caller's cx. If an error occured, try to
-  // wrap and set the exception. Otherwise, wrap the return value.
-  //
+  // Alright, we're back on the caller's cx.
 
-  if (!DispatchResult(cx)) {
-    JSErrorResult(cx, aRv, "Failed to dispatch");
-  }
+  //DispatchResult(cx);
 }
 // Internal ==================================================================
 

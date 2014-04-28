@@ -109,8 +109,7 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
 
   // In sandbox, no need to adjust underlying principal/policy
   // Only adjust sandbox-mode compartments
-  if (!IsCompartmentSandboxMode(compartment))
-    return;
+  bool isSandbox = IsCompartmentSandbox(compartment);
 
   nsresult rv;
 
@@ -120,7 +119,7 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
     ErrorResult aRv;
     nsRefPtr<Label> originalPrivacy =
       SANDBOX_CONFIG(compartment).GetPrivacyLabel();
-      privacy = originalPrivacy->Clone(aRv);
+    privacy = originalPrivacy->Clone(aRv);
     MOZ_ASSERT(!aRv.Failed());
   }
   nsRefPtr<Label> privs = GetCompartmentPrivileges(compartment);
@@ -196,47 +195,54 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
     }
   }
 
-  // Create new principal to be used for document
-  nsCOMPtr<nsIPrincipal> compPrincipal =
-    do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-  MOZ_ASSERT (NS_SUCCEEDED(rv));
+  if (!isSandbox) {
+    // Create new principal to be used for document
+    nsCOMPtr<nsIPrincipal> compPrincipal =
+      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+    MOZ_ASSERT (NS_SUCCEEDED(rv));
 
-  // Set the compartment principal to this new principal
-  SetCompartmentPrincipal(compartment, compPrincipal);
+    // Set the compartment principal to this new principal
+    SetCompartmentPrincipal(compartment, compPrincipal);
 
-  // Get the principal URI
-  nsCOMPtr<nsIURI> baseURI;
-  rv = compPrincipal->GetURI(getter_AddRefs(baseURI));
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
+    // Get the principal URI
+    nsCOMPtr<nsIURI> baseURI;
+    rv = compPrincipal->GetURI(getter_AddRefs(baseURI));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
 
-  // Set the compartment location to the base URI
-  EnsureCompartmentPrivate(compartment)->SetLocationURI(baseURI);
+    // Set the compartment location to the base URI
+    EnsureCompartmentPrivate(compartment)->SetLocationURI(baseURI);
 
-  // Get the compartment global
-  nsCOMPtr<nsIGlobalObject> global =
-    GetNativeForGlobal(JS_GetGlobalForCompartmentOrNull(cx, compartment));
+    // Get the compartment global
+    nsCOMPtr<nsIGlobalObject> global =
+      GetNativeForGlobal(JS_GetGlobalForCompartmentOrNull(cx, compartment));
 
-  // Get the underlying window
-  nsCOMPtr<nsIDOMWindow> win(do_QueryInterface(global));
-  MOZ_ASSERT(win);
+    // Get the underlying window
+    nsCOMPtr<nsIDOMWindow> win(do_QueryInterface(global));
+    MOZ_ASSERT(win);
 
-  // Get the window document
-  nsCOMPtr<nsIDOMDocument> domDoc;
-  win->GetDocument(getter_AddRefs(domDoc)); MOZ_ASSERT(domDoc);
+    // Get the window document
+    nsCOMPtr<nsIDOMDocument> domDoc;
+    win->GetDocument(getter_AddRefs(domDoc)); MOZ_ASSERT(domDoc);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(domDoc));
-  MOZ_ASSERT(doc);
+    nsCOMPtr<nsIDocument> doc(do_QueryInterface(domDoc));
+    MOZ_ASSERT(doc);
 
-  // Set the document principal
-  doc->SetPrincipal(compPrincipal);
+    // Set the document principal
+    doc->SetPrincipal(compPrincipal);
 
-  // Change the document base uri to the new base URI
-  doc->SetBaseURI(baseURI);
+    // Change the document base uri to the new base URI
+    doc->SetBaseURI(baseURI);
 
-  // Set iframe sandbox flags most restrcting flags:
-  nsAttrValue sandboxAttr(nsGkAtoms::allowscripts);
-  uint32_t flags = nsContentUtils::ParseSandboxAttributeToFlags(&sandboxAttr);
-  doc->SetSandboxFlags(flags);
+    // Set iframe sandbox flags most restrcting flags:
+    nsAttrValue sandboxAttr(nsGkAtoms::allowscripts);
+    uint32_t flags = nsContentUtils::ParseSandboxAttributeToFlags(&sandboxAttr);
+    doc->SetSandboxFlags(flags);
+
+    csp->AppendPolicy(policy, baseURI, false, true);
+    // set CSP  since we created a new principal
+    rv = compPrincipal->SetCsp(csp);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+  }
 
   // Refine policy of the csp object (may not be new)
   { // remove any existing policies
@@ -248,12 +254,6 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
         csp->RemovePolicy(i);
     }
   }
-  csp->AppendPolicy(policy, baseURI, false, true);
-  // set CSP  since we created a new principal
-  rv = compPrincipal->SetCsp(csp);
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-  //printf("!!! Set CSP to: %s", NS_ConvertUTF16toUTF8(policy).get());
 
   if (cx)
     js::RecomputeWrappers(cx, js::AllCompartments(), js::AllCompartments());
@@ -339,8 +339,6 @@ GetCompartmentPrivileges(JSCompartment*compartment)
   if (!privs || aRv.Failed())
     privs = new Label(); // empty privileges
 
-
-
   return privs.forget();
 }
 
@@ -391,9 +389,9 @@ GuardWrite(JSCompartment *compartment,
     printf("GuardWrite <%s,%s> to <%s,%s> | %s\n",
            NS_ConvertUTF16toUTF8(compPrivacyStr).get(),
            NS_ConvertUTF16toUTF8(compTrustStr).get(),
-           NS_ConvertUTF16toUTF8(privsStr).get(),
            NS_ConvertUTF16toUTF8(privacyStr).get(),
-           NS_ConvertUTF16toUTF8(trustStr).get());
+           NS_ConvertUTF16toUTF8(trustStr).get(),
+           NS_ConvertUTF16toUTF8(privsStr).get());
   }
 #endif
 
@@ -417,12 +415,54 @@ GuardWrite(JSCompartment *compartment,
     return true;
   }
   // <privacy,trust> [=_privs <clrPrivacy,clrTrust>
-  if (privacy.Subsumes(*privs, *clrPrivacy) && clrTrust->Subsumes(*privs, trust)) {
+  if (clrPrivacy->Subsumes(*privs, privacy) && trust.Subsumes(*privs, *clrTrust)) {
     return true;
   } 
 
   NS_WARNING("Label above clearance!\n");
   return false;
+}
+// Check if compartment can write to dst
+NS_EXPORT_(bool)
+GuardWrite(JSCompartment *compartment, JSCompartment *dst)
+{
+#if 1
+    {
+        printf("GuardWrite :");
+        {
+            char *origin;
+            uint32_t status = 0;
+            GetCompartmentPrincipal(compartment)->GetOrigin(&origin);
+            GetCompartmentPrincipal(compartment)->GetAppId(&status);
+            printf(" %s [%x] to", origin, status); 
+            nsMemory::Free(origin);
+        }
+        {
+            char *origin;
+            uint32_t status = 0;
+            GetCompartmentPrincipal(dst)->GetOrigin(&origin);
+            GetCompartmentPrincipal(dst)->GetAppId(&status);
+            printf("%s [%x] \n", origin, status); 
+            nsMemory::Free(origin);
+        }
+    }
+#endif
+
+
+  if (!sandbox::IsCompartmentSandboxed(dst)) {
+    NS_WARNING("Destination compartmetn is not sandboxed!\n");
+    return false;
+  }
+  nsRefPtr<Label> privacy = xpc::sandbox::GetCompartmentPrivacyLabel(dst);
+  nsRefPtr<Label> trust   = xpc::sandbox::GetCompartmentTrustLabel(dst);
+  nsRefPtr<Label> privs   = GetCompartmentPrivileges(compartment);
+
+  if (!privacy || !trust || !privs) {
+    NS_WARNING("Missing privacy or trust labels");
+    return false;
+  }
+
+  return GuardWrite(compartment, *privacy, *trust, privs);
 }
     
 // Check if information can flow from an object labeled with |privacy|
@@ -565,18 +605,12 @@ GuardRead(JSCompartment *compartment, JSCompartment *source, bool isGET)
 #endif
 
 
-  bool sandboxed = sandbox::IsCompartmentSandboxed(source);
-  bool sandbox = sandbox::IsCompartmentSandbox(source);
 
-  // When reading from sandbox, use the sandbox label, which is the
-  // clearance.
   nsRefPtr<Label> privacy, trust;
 
-  if (sandboxed) {
-    privacy = sandbox ? xpc::sandbox::GetCompartmentPrivacyClearance(source)
-                      : xpc::sandbox::GetCompartmentPrivacyLabel(source);
-    trust = sandbox ? xpc::sandbox::GetCompartmentTrustClearance(source)
-                    : xpc::sandbox::GetCompartmentTrustLabel(source);
+  if (sandbox::IsCompartmentSandboxed(source)) {
+    privacy = xpc::sandbox::GetCompartmentPrivacyLabel(source);
+    trust   = xpc::sandbox::GetCompartmentTrustLabel(source);
   } else {
     privacy = new Label();
     trust   = new Label();
@@ -588,7 +622,6 @@ GuardRead(JSCompartment *compartment, JSCompartment *source, bool isGET)
     NS_WARNING("Missing privacy or trust labels");
     return false;
   }
-
 
   return GuardRead(compartment, *privacy, *trust, privs);
 }

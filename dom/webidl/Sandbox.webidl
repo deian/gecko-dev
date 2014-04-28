@@ -20,9 +20,6 @@ interface Sandbox {
   [Pure] readonly attribute Label privacy;
   [Pure] readonly attribute Label trust;
 
-  // Was the sandbox used?
-  readonly attribute boolean isClean;
-
   // Read message from sandbox
   [Throws] void ondone(EventHandler successHandler,
                        optional EventHandler errorHandler);
@@ -41,7 +38,7 @@ interface Sandbox {
   //
   // TODO: We should really change this into a postMessage-like
   // interface: grant/ongrant
-  void grant(Privilege priv);
+  [Throws] void grant(Privilege priv);
 
   // Attach object into the sandbox as window
   [Throws] void attachObject(object aObj, DOMString name);

@@ -3526,35 +3526,24 @@ public:
 
     // Is the compartment in sandbox mode
     inline bool isSandboxMode() {
-        return  mPrivacyLabel && mTrustLabel;
-    }
-
-    // Is the compartment in sandbox mode
-    inline bool HaveClerance() {
-        return  !!mPrivacyClearance && !!mTrustClearance;
+        return  !!mPrivacyLabel && !!mTrustLabel && !isSandbox();
     }
 
 #define DEFINE_SET_LABEL(name, sboxSetter)                               \
     inline void Set##name(mozilla::dom::Label *aLabel) {                 \
         NS_ASSERTION(aLabel, "Set##name called with null label!");       \
-        if (isSandbox()) {                                               \
-           mSandbox->sboxSetter(aLabel);                                 \
-        } else {                                                         \
           (m##name) = aLabel;                                            \
-        }                                                                \
     }
 
-#define DEFINE_GET_LABEL(name, sboxGetter)                      \
-    inline already_AddRefed<mozilla::dom::Label> Get##name() {  \
-        nsRefPtr<mozilla::dom::Label> l = isSandbox() ?         \
-          mSandbox->sboxGetter() : (m##name);                   \
-        return !l ? nullptr: l.forget();                        \
+#define DEFINE_GET_LABEL(name, sboxGetter)                               \
+    inline already_AddRefed<mozilla::dom::Label> Get##name() {           \
+        nsRefPtr<mozilla::dom::Label> l = (m##name);                     \
+        return !l ? nullptr: l.forget();                                 \
     }
 
 #define DEFINE_SET_CLEARANCE(name)                                       \
     inline void Set##name(mozilla::dom::Label *aLabel) {                 \
         NS_ASSERTION(aLabel, "Set##name called with null label!");       \
-        NS_ASSERTION(isSandboxMode(), "Set##name called on sandbox!");   \
         (m##name) = aLabel;                                              \
     }
 

@@ -107,8 +107,6 @@ public: // DOM interface =====================================================
   already_AddRefed<Label> Privacy() const;
   already_AddRefed<Label> Trust() const;
 
-  bool IsClean() const;
-
   void Ondone(JSContext* cx, EventHandlerNonNull* successHandler, 
               const Optional<nsRefPtr<EventHandlerNonNull> >& errorHandler,
               ErrorResult& aRv);
@@ -128,7 +126,7 @@ public: // DOM interface =====================================================
   }
   JS::Value GetResult(JSContext* cx, ErrorResult& aRv);
 
-  void Grant(JSContext* cx, mozilla::dom::Privilege& priv);
+  void Grant(JSContext* cx, mozilla::dom::Privilege& priv, ErrorResult& aRv);
 
 
   // attach window object
@@ -202,20 +200,14 @@ public: // Static DOM interface ==============================================
 
 public: // Internal ==========================================================
 
-  // Raise sandbox and compartment labels
-  void RaiseLabel();
-
   // Call onmessage handler registered _on_ the sandbox
-  bool DispatchResult(JSContext* cx);
+  void DispatchResult(JSContext* cx, bool inSandbox = false);
 
   // Set onmessage property _in_ the sandbox, this is called when the
   // owner posts a message _to_ the sandbox
   void SetOnmessageForSandbox(mozilla::dom::EventHandlerNonNull* aCallback);
   // Dispatch the onmessage event _in_ the sandbox
   void DispatchSandboxOnmessageEvent(ErrorResult& aRv);
-
-  // check if current label flow to label of sandbox
-  bool GuardWriteOnly(JSContext* cx) const;
 
 protected: // Unsafe functions ===============================================
   // These functions are part of the trusted computing base and should
@@ -228,6 +220,11 @@ protected: // Unsafe functions ===============================================
   friend class xpc::sandbox::SandboxConfig;
 
 private:
+  bool GuardWriteOnly(JSContext* cx) const; // can the context write to sandbox?
+  bool GuardReadOnly(JSContext* cx) const; // can the context read from sandbox?
+  bool GuardReadOnly(JSCompartment* compartment) const;
+
+
   void SetPrivacyLabel(JSContext* cx, JSCompartment *compartment,
                        mozilla::dom::Label& aLabel, ErrorResult& aRv);
   void SetTrustLabel(JSContext* cx, JSCompartment *compartment,
@@ -237,16 +234,12 @@ private:
   void EvalInSandbox(JSContext *cx, JS::HandleScript script, ErrorResult &aRv);
 
 
+  // is the sandbox clean?
+  bool mIsClean;
+
   // What is the sandbox Label?
   nsRefPtr<Label> mPrivacy;
   nsRefPtr<Label> mTrust;
-
-  // What is the sandbox current label
-  nsRefPtr<Label> mCurrentPrivacy;
-  nsRefPtr<Label> mCurrentTrust;
-
-  // Underlying sandbox context
-  nsRefPtr<xpc::ContextHolder> mSandCxHolder;
 
   // Sandbox object
   JS::Heap<JSObject*> mSandboxObj;
@@ -256,6 +249,8 @@ private:
 
   // Sandbox computation result
   JS::Heap<JS::Value> mResult;
+  nsRefPtr<Label> mResultPrivacy;
+  nsRefPtr<Label> mResultTrust;
   ResultType mResultType;
 
   // Sandbox event target
