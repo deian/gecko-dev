@@ -411,7 +411,7 @@ SandboxPolicy::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wrapper::A
         if (JSID_IS_STRING(id))
             isPostMessage = IsPostMessage(name,JSID_TO_FLAT_STRING(id));
 
-#if 1
+#if SWAPI_DEBUG
         printf("SandboxPolicy::check id=%s ", name); 
         if (JSID_IS_STRING(id)) {
         size_t propLength=0;
@@ -437,7 +437,7 @@ SandboxPolicy::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wrapper::A
                                      ? js::GetObjectCompartment(wrapped)
                                      : js::GetObjectCompartment(wrapper);
 
-#if 1
+#if SWAPI_DEBUG
     {
         printf("SandboxPolicy::check %s\n", 
                 act == Wrapper::SET ? "SET" :
