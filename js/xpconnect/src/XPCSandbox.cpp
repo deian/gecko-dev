@@ -377,7 +377,7 @@ GuardWrite(JSCompartment *compartment,
   }
 
 
-#if 1
+#if SWAPI_DEBUG
   {
     nsAutoString compPrivacyStr, compTrustStr, privacyStr, trustStr, privsStr;
     compPrivacy->Stringify(compPrivacyStr);
@@ -426,7 +426,7 @@ GuardWrite(JSCompartment *compartment,
 NS_EXPORT_(bool)
 GuardWrite(JSCompartment *compartment, JSCompartment *dst)
 {
-#if 1
+#if SWAPI_DEBUG
     {
         printf("GuardWrite :");
         {
@@ -504,7 +504,7 @@ GuardRead(JSCompartment *compartment,
   }
 
 
-#if 1
+#if SWAPI_DEBUG
   {
     nsAutoString compPrivacyStr, compTrustStr, privacyStr, trustStr, privsStr;
     compPrivacy->Stringify(compPrivacyStr);
@@ -582,7 +582,7 @@ GuardRead(JSCompartment *compartment, JSCompartment *source, bool isGET)
   //               use compartment privs
   //isGET = false: source is writing to compartment
   //               use source privs
-#if 1
+#if SWAPI_DEBUG
     {
         printf("GuardRead %s :", isGET ? "GET" : "SET");
         {
