@@ -111,6 +111,10 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
   // Only adjust sandbox-mode compartments
   bool isSandbox = IsCompartmentSandbox(compartment);
 
+#if SWAPI_DEBUG
+  printf("Refine: isSandbox = %d\n",IsCompartmentSandbox(compartment));
+#endif
+
   nsresult rv;
 
   // Clone the privacy label and reduce it:
@@ -126,8 +130,12 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
   privacy->Reduce(*privs);
 
   // Case 1: Empty/public label, don't loosen/impose new restrictions
-  if (privacy->IsEmpty())
+  if (privacy->IsEmpty()) {
+#if SWAPI_DEBUG
+    printf("Refine: Privacy label is empty, do nothing\n");
+#endif
     return;
+  }
 
   nsString policy;
   PrincipalArray* labelPrincipals = privacy->GetPrincipalsIfSingleton();
@@ -149,65 +157,82 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
       origins.Append(NS_LITERAL_STRING(" "));
     }
 
-    policy = NS_LITERAL_STRING("default-src ")  + origins
-               + NS_LITERAL_STRING("'unsafe-inline'")
-           + NS_LITERAL_STRING(";script-src ")  + origins
-               + NS_LITERAL_STRING("'unsafe-inline'")
-           + NS_LITERAL_STRING(";object-src ")  + origins
-           + NS_LITERAL_STRING(";style-src ")   + origins
-           + NS_LITERAL_STRING(";img-src ")     + origins
-               + NS_LITERAL_STRING("'unsafe-inline'")
-           + NS_LITERAL_STRING(";media-src ")   + origins
-           + NS_LITERAL_STRING(";frame-src ")   + origins
-           + NS_LITERAL_STRING(";font-src ")    + origins
-           + NS_LITERAL_STRING(";connect-src ") + origins
+    policy = NS_LITERAL_STRING("default-src 'unsafe-inline' ")  + origins
+           + NS_LITERAL_STRING(";script-src 'unsafe-inline' ")  + origins
+           + NS_LITERAL_STRING(";object-src ")                  + origins
+           + NS_LITERAL_STRING(";style-src ")                   + origins
+           + NS_LITERAL_STRING(";img-src 'unsafe-inline' ")     + origins
+           + NS_LITERAL_STRING(";media-src ")                   + origins
+           + NS_LITERAL_STRING(";frame-src ")                   + origins
+           + NS_LITERAL_STRING(";font-src ")                    + origins
+           + NS_LITERAL_STRING(";connect-src ")                 + origins
            + NS_LITERAL_STRING(";");
+#if SWAPI_DEBUG
+    printf("Refine: Privacy label is disjunctive\n");
+#endif
 
   } else {
     // Case 3: not the empty label or singleton disjunctive role
     // Disable all network and storage access.
 
     // Policy to disable all communication
-    policy = NS_LITERAL_STRING("default-src 'none' 'unsafe-inline';\
-                                script-src  'none' 'unsafe-inline';\
-                                object-src  'none';\
-                                style-src   'none' 'unsafe-inline';\
-                                img-src     'none';\
-                                media-src   'none';\
-                                frame-src   'none';\
-                                font-src    'none';\
-                                connect-src 'none';");
+    policy = NS_LITERAL_STRING("default-src 'none' 'unsafe-inline';")
+           + NS_LITERAL_STRING("script-src  'none' 'unsafe-inline';")
+           + NS_LITERAL_STRING("object-src  'none';")
+           + NS_LITERAL_STRING("style-src   'none' 'unsafe-inline';")
+           + NS_LITERAL_STRING("img-src     'none';")
+           + NS_LITERAL_STRING("media-src   'none';")
+           + NS_LITERAL_STRING("frame-src   'none';")
+           + NS_LITERAL_STRING("font-src    'none';")
+           + NS_LITERAL_STRING("connect-src 'none';");
+#if SWAPI_DEBUG
+    printf("Refine: Privacy label is conjunctive\n");
+#endif
   }
 
-  nsCOMPtr<nsIContentSecurityPolicy> csp;
-  {
-    nsCOMPtr<nsIPrincipal> compPrincipal = GetCompartmentPrincipal(compartment);
+#ifdef SWAPI_DEBUG
+   {
+     nsCOMPtr<nsIPrincipal> compPrincipal = GetCompartmentPrincipal(compartment);
+     nsCOMPtr<nsIContentSecurityPolicy> csp;
+     rv = compPrincipal->GetCsp(getter_AddRefs(csp));
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+     int numPolicies = 0;
+     if (csp) {
+       nsresult rv = csp->GetPolicyCount(&numPolicies);
+       MOZ_ASSERT(NS_SUCCEEDED(rv));
+       printf("Refine: Number of existing CSP policies: %d\n", numPolicies);
+       for (int i=0; i<numPolicies; i++) {
+         nsAutoString policy;
+         csp->GetPolicy(i, policy);
+         printf("Refine: Current principal has CSP[%d]: %s", i,
+             NS_ConvertUTF16toUTF8(policy).get());
+       }
+     }
+   }
+#endif
+
+  nsCOMPtr<nsIPrincipal> compPrincipal;
+  if (isSandbox) {
+    // Use existing principal
+    compPrincipal= GetCompartmentPrincipal(compartment);
     MOZ_ASSERT(compPrincipal);
-
-    // If CSP policy exists on current compartment, get it.
-    // we handle composition of IFC with CSP by tightening down CSP
-    rv = compPrincipal->GetCsp(getter_AddRefs(csp));
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-    // Create a new CSP object, if none exist
-    if(!csp) {
-      csp = do_CreateInstance("@mozilla.org/contentsecuritypolicy;1", &rv);
-      MOZ_ASSERT(NS_SUCCEEDED(rv) && csp);
-    }
+  } else { 
+    // Create new principal to be used for document
+    compPrincipal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+    MOZ_ASSERT (NS_SUCCEEDED(rv));
+#if SWAPI_DEBUG
+    printf("Refine: created new principal %p\n", compPrincipal.get());
+#endif
   }
+
+  // Get the principal URI
+  nsCOMPtr<nsIURI> baseURI;
+  rv = compPrincipal->GetURI(getter_AddRefs(baseURI));
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
   if (!isSandbox) {
-    // Create new principal to be used for document
-    nsCOMPtr<nsIPrincipal> compPrincipal =
-      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    MOZ_ASSERT (NS_SUCCEEDED(rv));
-
     // Set the compartment principal to this new principal
     SetCompartmentPrincipal(compartment, compPrincipal);
-
-    // Get the principal URI
-    nsCOMPtr<nsIURI> baseURI;
-    rv = compPrincipal->GetURI(getter_AddRefs(baseURI));
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
 
     // Set the compartment location to the base URI
     EnsureCompartmentPrivate(compartment)->SetLocationURI(baseURI);
@@ -238,25 +263,53 @@ RefineCompartmentSandboxPolicies(JSCompartment *compartment, JSContext *cx)
     uint32_t flags = nsContentUtils::ParseSandboxAttributeToFlags(&sandboxAttr);
     doc->SetSandboxFlags(flags);
 
-    csp->AppendPolicy(policy, baseURI, false, true);
-    // set CSP  since we created a new principal
+#if SWAPI_DEBUG
+    printf("Refine: Set principal on document\n");
+#endif
+  }
+
+  nsCOMPtr<nsIContentSecurityPolicy> csp;
+  rv = compPrincipal->GetCsp(getter_AddRefs(csp));
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  if (!csp) {
+    csp = do_CreateInstance("@mozilla.org/contentsecuritypolicy;1", &rv);
+    MOZ_ASSERT(NS_SUCCEEDED(rv) && csp);
+    // Set the csp since we create a new principal
     rv = compPrincipal->SetCsp(csp);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
+//    csp->SetRequestContext(baseURI, nullptr, compPrincipal, nullptr);
   }
 
-  // Refine policy of the csp object (may not be new)
-  { // remove any existing policies
-    // TODO: keep original -- from header -- CSP policies
-    int numPolicies = 0;
-    nsresult rv = csp->GetPolicyCount(&numPolicies);
-    if (NS_SUCCEEDED(rv)) {
-      for (int i=numPolicies-1; i>=0; i--)
-        csp->RemovePolicy(i);
-    }
-  }
 
-  if (cx)
+  // set CSP  since we created a new principal
+  rv = csp->AppendPolicy(policy, baseURI, false, true);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+#ifdef SWAPI_DEBUG
+  printf("Refine: appended policy to principal %p [csp=%p]: %s\n", compPrincipal.get(), csp.get(), NS_ConvertUTF16toUTF8(policy).get());
+#endif
+
+#ifdef SWAPI_DEBUG
+   {
+     int numPolicies = 0;
+     nsresult rv = csp->GetPolicyCount(&numPolicies);
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+     printf("Refine: Number of CSP policies: %d\n", numPolicies);
+     for (int i=0; i<numPolicies; i++) {
+       nsAutoString policy;
+       csp->GetPolicy(i, policy);
+       printf("Refine: Principal has CSP[%d]: %s", i,
+           NS_ConvertUTF16toUTF8(policy).get());
+     }
+   }
+#endif
+
+  if (cx) {
     js::RecomputeWrappers(cx, js::AllCompartments(), js::AllCompartments());
+#if SWAPI_DEBUG
+    printf("Refine: Recomputed wrappers\n");
+#endif
+  }
 }
 
 
